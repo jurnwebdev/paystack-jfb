@@ -18,8 +18,29 @@ class Shortcodes {
     $resp=API::json_post('https://api.paystack.co/transaction/initialize',$body);
     if(is_wp_error($resp)) return '<p style="color:red;">Paystack initialize failed: '.esc_html($resp->get_error_message()).'</p>';
     if(empty($resp['status'])||empty($resp['data']['authorization_url'])) return '<p style="color:red;">Unexpected response from Paystack initialize.</p>';
-    $auth=esc_url_raw($resp['data']['authorization_url']); nocache_headers(); if(!headers_sent()){ wp_safe_redirect($auth); exit; }
-    return '<p>Redirecting… <a href="'.esc_attr($auth).'">Continue</a></p>';
+    $auth = esc_url_raw( $resp['data']['authorization_url'] );
+
+// Try server-side redirect first
+nocache_headers();
+if ( ! headers_sent() ) {
+    wp_safe_redirect( $auth, 302 );
+    exit;
+}
+
+// Fallbacks: JS + meta-refresh + a link
+$auth_html = esc_url( $auth );
+$auth_js   = esc_js( $auth );
+return '
+  <p>Redirecting… <a href="'.$auth_html.'">Continue</a></p>
+  <script>
+    // Redirect ASAP (works even if headers already sent)
+    setTimeout(function(){ window.location.replace("'.$auth_js.'"); }, 50);
+  </script>
+  <noscript>
+    <meta http-equiv="refresh" content="0;url='.$auth_html.'">
+  </noscript>
+';
+
   }
   public static function callback(){
     $reference=isset($_GET['reference'])?sanitize_text_field(wp_unslash($_GET['reference'])):''; if(empty($reference)) $reference=isset($_GET['trxref'])?sanitize_text_field(wp_unslash($_GET['trxref'])):'';
