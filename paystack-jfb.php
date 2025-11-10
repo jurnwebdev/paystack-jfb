@@ -37,3 +37,20 @@ add_action('plugins_loaded', function () {
     \PaystackJFB\Webhook::init();
     \PaystackJFB\Cron::init();
 });
+
+// Better diagnostics for email issues
+add_action('wp_mail_failed', function($wp_error){
+  $code = is_wp_error($wp_error) ? $wp_error->get_error_code() : null;
+  $msg  = is_wp_error($wp_error) ? $wp_error->get_error_message() : null;
+  $data = is_wp_error($wp_error) ? $wp_error->get_error_data() : null;
+
+  // Try to extract a reference if you inject it into headers or data elsewhere
+  $ref  = is_array($data) && isset($data['reference']) ? $data['reference'] : '';
+
+  \PaystackJFB\Logs::add('wp_mail_failed', $ref, 'error', [
+    'code' => $code,
+    'msg'  => $msg,
+    'data' => $data,
+  ]);
+}, 10, 1);
+
