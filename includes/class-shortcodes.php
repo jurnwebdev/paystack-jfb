@@ -38,10 +38,25 @@ class Shortcodes {
         $wpdb->update($t,$upd,['_ID'=>$cct_id],$fmt,['%s']);
       }
     }
-    if($status==='success' && !empty($s['email_enable'])){
-      $paidMysql=null; if($paidIso){ $ts=strtotime($paidIso); if($ts) $paidMysql=gmdate('Y-m-d H:i:s',$ts); }
-      Email::send_success(['first_name'=>$first,'reference'=>$reference,'amount_kobo'=>$amount,'amount_ngn'=>number_format($amount/100,2),'email'=>$email,'paid_at_iso'=>$paidIso,'paid_at_mysql'=>$paidMysql]);
-    }
+    // Send email from callback ONLY if webhook is disabled.
+// When webhook is enabled, webhook sends the email (to avoid duplicates).
+if ($status === 'success' && !empty($s['email_enable']) && empty($s['enable_webhook'])) {
+  $paidMysql = null;
+  if ($paidIso) {
+    $ts = strtotime($paidIso);
+    if ($ts) $paidMysql = gmdate('Y-m-d H:i:s', $ts);
+  }
+  Email::send_success([
+    'first_name'   => $first,
+    'reference'    => $reference,
+    'amount_kobo'  => $amount,
+    'amount_ngn'   => number_format($amount/100, 2),
+    'email'        => $email,
+    'paid_at_iso'  => $paidIso,
+    'paid_at_mysql'=> $paidMysql,
+  ]);
+}
+
     return '<div class="paystack-result"><h3>Payment Verification</h3><p><strong>Reference:</strong> '.esc_html($reference).'</p><p><strong>Status:</strong> '.esc_html($status).'</p><p><strong>Email:</strong> '.esc_html($email).'</p><p><strong>Amount:</strong> '.number_format($amount/100,2).' NGN</p></div>';
   }
 }
