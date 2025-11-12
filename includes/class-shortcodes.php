@@ -68,7 +68,7 @@ class Shortcodes {
     }
 
     $auth = esc_url_raw($resp['data']['authorization_url']);
-    \PaystackJFB\Logs::add('initialize', $reference, 'auth_url', $resp);
+    \PaystackJFB\Logs::add_event('initialize', $reference, 'auth_url', $resp, 'info');
 
     // Try server-side redirect first
     nocache_headers();
@@ -99,12 +99,13 @@ class Shortcodes {
 
     $verify = API::json_get('https://api.paystack.co/transaction/verify/' . rawurlencode($reference));
     if (is_wp_error($verify) || empty($verify['data'])) {
+      \PaystackJFB\Logs::add_event('error', $reference, 'verify_failed', null, 'error');
       return '<p style="color:red;">Verification failed.</p>';
     }
 
     $d      = $verify['data'];
     $status = strtolower($d['status'] ?? '');
-    \PaystackJFB\Logs::add('callback_verify', $reference, $status, $d);
+    \PaystackJFB\Logs::add_event('callback_verify', $reference, $status, $d, $status === 'success' ? 'info' : 'error');
 
     $amount  = intval($d['amount'] ?? 0);
     $email   = isset($d['customer']['email']) ? sanitize_email($d['customer']['email']) : '';
@@ -139,7 +140,9 @@ class Shortcodes {
       $webhook_enabled = ($v === 1 || $v === '1' || $v === true || $v === 'true' || $v === 'on' || $v === 'yes');
     }
 
-    // Optional DB update
+    // --- Attempt DB update and record whether we actually changed status to 'success' ---
+    $db_updated = false;
+
     if ($status === 'success' && !empty($s['enable_db_update']) && $cct_id) {
       global $wpdb;
       $t   = $wpdb->prefix . 'jet_cct_ticket_order';
@@ -162,52 +165,52 @@ class Shortcodes {
         $fmt = ['%s','%s','%s','%f','%s'];
         if ($paidMysql) { $upd['paid_at'] = $paidMysql; $fmt[] = '%s'; }
 
-        $wpdb->update($t, $upd, ['_ID' => $cct_id], $fmt, ['%s']);
+        $rows = $wpdb->update($t, $upd, ['_ID' => $cct_id], $fmt, ['%s']);
+        if ($rows !== false) {
+          $db_updated = true;
+          \PaystackJFB\Logs::add_event('db_update', $reference, 'success', ['cct_id' => $cct_id], 'info');
+        }
       }
     }
 
-    /**
-     * EMAIL SENDING
-     * - Send when status=success and email_enable is on.
-     * - De-dupe using a transient so webhook/callback won’t double-send.
-     */
+    // EMAIL SENDING: decide who sends
+    $dedupe_key = 'paystackjfb_email_sent_' . md5($reference);
+    $should_send_email = false;
+
     if ($status === 'success' && !empty($s['email_enable'])) {
-      $dedupe_key = 'paystackjfb_email_sent_' . md5($reference);
-
-      if (!get_transient($dedupe_key)) {
-        if (!empty($email)) {
-          $paidMysql = null;
-          if ($paidIso) {
-            $ts = strtotime($paidIso);
-            if ($ts) $paidMysql = gmdate('Y-m-d H:i:s', $ts);
-          }
-
-          $sent = Email::send_success([
-            'first_name'     => $first,
-            'reference'      => $reference,
-            'amount_kobo'    => $amount,
-            'amount_ngn'     => number_format($amount / 100, 2),
-            'email'          => $email,
-            'paid_at_iso'    => $paidIso,
-            'paid_at_mysql'  => $paidMysql,
-            'source'         => $webhook_enabled ? 'callback_fallback' : 'callback',
-          ]);
-
-          \PaystackJFB\Logs::add('email_send', $reference, $sent ? 'sent' : 'failed', [
-            'to'     => $email,
-            'source' => $webhook_enabled ? 'callback_fallback' : 'callback',
-          ]);
-
-          if ($sent) {
-            set_transient($dedupe_key, 1, DAY_IN_SECONDS);
-          }
-        } else {
-          \PaystackJFB\Logs::add('email_send', $reference, 'no_recipient', [
-            'meta_email' => $meta['email'] ?? null
-          ]);
-        }
+      if (!empty($s['enable_db_update'])) {
+        // Only the process that updated the DB should send the email
+        $should_send_email = $db_updated === true;
       } else {
-        \PaystackJFB\Logs::add('email_send', $reference, 'skipped_dedupe', []);
+        // No DB update: fallback to transient dedupe
+        $should_send_email = ! get_transient($dedupe_key);
+      }
+
+      if ($should_send_email && !empty($email)) {
+        $paidMysql = null;
+        if ($paidIso) {
+          $ts = strtotime($paidIso);
+          if ($ts) $paidMysql = gmdate('Y-m-d H:i:s', $ts);
+        }
+
+        $sent = Email::send_success([
+          'first_name'     => $first,
+          'reference'      => $reference,
+          'amount_kobo'    => $amount,
+          'amount_ngn'     => number_format($amount / 100, 2),
+          'email'          => $email,
+          'paid_at_iso'    => $paidIso,
+          'paid_at_mysql'  => $paidMysql,
+          'source'         => $webhook_enabled ? 'callback_fallback' : 'callback',
+        ]);
+
+        if ($sent) {
+          set_transient($dedupe_key, 1, DAY_IN_SECONDS);
+        } else {
+          if (!empty($s['debug_enable'])) {
+            \PaystackJFB\Logs::add_event('error', $reference, 'email_failed', ['to' => $email], 'error');
+          }
+        }
       }
     }
 
