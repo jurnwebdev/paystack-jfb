@@ -67,6 +67,11 @@ class Webhook {
       $first = sanitize_text_field($meta[$fname_key]);
     }
 
+    // Extract vendor-related parameters
+    $vendor_revenue = isset($meta['new_vendor_revenue']) ? intval($meta['new_vendor_revenue']) : 0;
+    $vendor_tickets = isset($meta['new_vendor_tickets_sold']) ? intval($meta['new_vendor_tickets_sold']) : 0;
+    $authorid = isset($meta['authorid']) ? intval($meta['authorid']) : 0;
+
     // Attempt DB update and set db_updated flag
     $db_updated = false;
     if ($status === 'success' && !empty($s['enable_db_update']) && $cct_id) {
@@ -97,6 +102,29 @@ class Webhook {
           \PaystackJFB\Logs::add_event('db_update', $ref, 'success', ['cct_id' => $cct_id], 'info');
         }
       }
+    }
+
+    // --- Attempt usermeta update for vendor data ---
+    if ($status === 'success' && ($vendor_revenue > 0 || $vendor_tickets > 0) && $authorid > 0) {
+      // Update total_sales
+      if ($vendor_revenue > 0) {
+        $result = update_user_meta($authorid, 'total_sales', $vendor_revenue);
+        if ($result === false && !metadata_exists('user', $authorid, 'total_sales')) {
+          \PaystackJFB\Logs::add_event('error', $ref, 'usermeta_update_failed', ['user_id' => $authorid, 'meta_key' => 'total_sales', 'value' => $vendor_revenue], 'error');
+          return new \WP_REST_Response(['ok'=>false,'msg'=>'Failed to update vendor revenue'],500);
+        }
+      }
+      
+      // Update total_tickets_sold
+      if ($vendor_tickets > 0) {
+        $result = update_user_meta($authorid, 'total_tickets_sold', $vendor_tickets);
+        if ($result === false && !metadata_exists('user', $authorid, 'total_tickets_sold')) {
+          \PaystackJFB\Logs::add_event('error', $ref, 'usermeta_update_failed', ['user_id' => $authorid, 'meta_key' => 'total_tickets_sold', 'value' => $vendor_tickets], 'error');
+          return new \WP_REST_Response(['ok'=>false,'msg'=>'Failed to update vendor tickets'],500);
+        }
+      }
+      
+      \PaystackJFB\Logs::add_event('usermeta_update', $ref, 'success', ['user_id' => $authorid, 'total_sales' => $vendor_revenue, 'total_tickets_sold' => $vendor_tickets], 'info');
     }
 
     // Email sending decision

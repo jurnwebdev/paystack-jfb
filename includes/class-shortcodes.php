@@ -15,6 +15,9 @@ class Shortcodes {
     $amount_ng = isset($_GET['amount'])   ? sanitize_text_field(wp_unslash($_GET['amount'])) : '';
     $reference = isset($_GET['reference'])? sanitize_text_field(wp_unslash($_GET['reference'])) : '';
     $callback  = isset($_GET['callback']) ? esc_url_raw(wp_unslash($_GET['callback'])) : '';
+    $vendor_revenue = isset($_GET['new_vendor_revenue']) ? sanitize_text_field(wp_unslash($_GET['new_vendor_revenue'])) : '';
+    $vendor_tickets = isset($_GET['new_vendor_tickets_sold']) ? sanitize_text_field(wp_unslash($_GET['new_vendor_tickets_sold'])) : '';
+    $authorid = isset($_GET['authorid']) ? sanitize_text_field(wp_unslash($_GET['authorid'])) : '';
 
     if ( empty($email) || empty($amount_ng) ) {
       return '<p style="color:red;">Missing required parameters: email and amount.</p>';
@@ -48,6 +51,17 @@ class Shortcodes {
     if (empty($callback)) {
       $cb = Helpers::callback_url_from_settings();
       if ($cb) $callback = $cb;
+    }
+
+    // Add vendor-related metadata
+    if (!empty($vendor_revenue)) {
+      $md['new_vendor_revenue'] = $vendor_revenue;
+    }
+    if (!empty($vendor_tickets)) {
+      $md['new_vendor_tickets_sold'] = $vendor_tickets;
+    }
+    if (!empty($authorid)) {
+      $md['authorid'] = $authorid;
     }
 
     $body = [
@@ -133,6 +147,11 @@ class Shortcodes {
       $first = sanitize_text_field(wp_unslash($_GET[$fname_key]));
     }
 
+    // Extract vendor-related parameters
+    $vendor_revenue = isset($meta['new_vendor_revenue']) ? intval($meta['new_vendor_revenue']) : 0;
+    $vendor_tickets = isset($meta['new_vendor_tickets_sold']) ? intval($meta['new_vendor_tickets_sold']) : 0;
+    $authorid = isset($meta['authorid']) ? intval($meta['authorid']) : 0;
+
     // Normalize webhook-enabled flag
     $webhook_enabled = false;
     if (isset($s['enable_webhook'])) {
@@ -171,6 +190,33 @@ class Shortcodes {
           \PaystackJFB\Logs::add_event('db_update', $reference, 'success', ['cct_id' => $cct_id], 'info');
         }
       }
+    }
+
+    // --- Attempt usermeta update for vendor data ---
+    $usermeta_updated = false;
+    if ($status === 'success' && ($vendor_revenue > 0 || $vendor_tickets > 0) && $authorid > 0) {
+      global $wpdb;
+      
+      // Update total_sales
+      if ($vendor_revenue > 0) {
+        $result = update_user_meta($authorid, 'total_sales', $vendor_revenue);
+        if ($result === false && !metadata_exists('user', $authorid, 'total_sales')) {
+          \PaystackJFB\Logs::add_event('error', $reference, 'usermeta_update_failed', ['user_id' => $authorid, 'meta_key' => 'total_sales', 'value' => $vendor_revenue], 'error');
+          return '<p style="color:red;">Failed to update vendor revenue in user metadata.</p>';
+        }
+      }
+      
+      // Update total_tickets_sold
+      if ($vendor_tickets > 0) {
+        $result = update_user_meta($authorid, 'total_tickets_sold', $vendor_tickets);
+        if ($result === false && !metadata_exists('user', $authorid, 'total_tickets_sold')) {
+          \PaystackJFB\Logs::add_event('error', $reference, 'usermeta_update_failed', ['user_id' => $authorid, 'meta_key' => 'total_tickets_sold', 'value' => $vendor_tickets], 'error');
+          return '<p style="color:red;">Failed to update vendor tickets in user metadata.</p>';
+        }
+      }
+      
+      $usermeta_updated = true;
+      \PaystackJFB\Logs::add_event('usermeta_update', $reference, 'success', ['user_id' => $authorid, 'total_sales' => $vendor_revenue, 'total_tickets_sold' => $vendor_tickets], 'info');
     }
 
     // EMAIL SENDING: decide who sends
